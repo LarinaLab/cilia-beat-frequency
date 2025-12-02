@@ -1,0 +1,9 @@
+name: cilia-beat-frequency
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - numpy
+  - jupyter
+  - tqdm
+  - imageio
