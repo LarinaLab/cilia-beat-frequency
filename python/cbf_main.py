@@ -153,6 +153,11 @@ if __name__ == "__main__":
         image_series = load_tiff_series(args.path)
         print(f"Loaded image series with shape: {image_series.shape}")
 
+    # Handle RGB TIFFs by removing the color channel dimension
+    if image_series.ndim == 4 and image_series.shape[-1] == 3:
+        image_series = image_series[..., 0]
+        print(f"RGB channels detected, converting series to grayscale. New shape: {image_series.shape}")
+
     # Save first_img for visualization before applying mask
     first_img = image_series[1].copy()
 
