@@ -153,10 +153,26 @@ if __name__ == "__main__":
         image_series = load_tiff_series(args.path)
         print(f"Loaded image series with shape: {image_series.shape}")
 
-    # Handle RGB TIFFs by removing the color channel dimension
-    if image_series.ndim == 4 and image_series.shape[-1] == 3:
-        image_series = image_series[..., 0]
-        print(f"RGB channels detected, converting series to grayscale. New shape: {image_series.shape}")
+    # Handle multi-channel TIFFs (RGB, RGBA, etc.) by converting to grayscale
+    # Weighted average for RGB to grayscale is found here: https://stackoverflow.com/questions/687261/converting-rgb-to-grayscale-intensity
+    if image_series.ndim == 4:
+        num_channels = image_series.shape[-1]
+        if num_channels == 3:
+            # RGB: Use weighted average for proper grayscale conversion
+            image_series = (0.299 * image_series[..., 0] + 
+                          0.587 * image_series[..., 1] + 
+                          0.114 * image_series[..., 2]).astype(image_series.dtype)
+            print(f"RGB image detected. Converted to grayscale using luminance weights. New shape: {image_series.shape}")
+        elif num_channels == 4:
+            # RGBA: Ignore alpha channel, use RGB with weighted average
+            image_series = (0.299 * image_series[..., 0] + 
+                          0.587 * image_series[..., 1] + 
+                          0.114 * image_series[..., 2]).astype(image_series.dtype)
+            print(f"RGBA image detected. Converted to grayscale (alpha channel ignored). New shape: {image_series.shape}")
+        else:
+            # Other multi-channel: Just take first channel and warn user
+            image_series = image_series[..., 0]
+            print(f"WARNING: {num_channels}-channel image detected. Using only first channel. New shape: {image_series.shape}")
 
     # Save first_img for visualization before applying mask
     first_img = image_series[1].copy()
@@ -264,20 +280,6 @@ if __name__ == "__main__":
         print("Aborting analysis.")
         exit(0)
 
-    ## Load in tiff image series
-    #print("Loading TIFF image series...")
-    ## FOR TESTING, LOAD IN PARTIAL TIFF SERIES
-    ## If args.tiff_stack is True, load a single 3D TIFF file
-    #if args.tiff_stack:
-    #    image_series = load_tiff_3d(os.path.join(args.path, [f for f in os.listdir(args.path) if f.endswith('.tiff') or f.endswith('.tif')][0]))
-    ## First, see if image_series is already defined (to avoid loading it twice)
-    #if 'image_series' not in locals():
-    #    # If not defined, load the image series
-    #    image_series = load_tiff_series(args.path)
-    #    print(f"Loaded image series with shape: {image_series.shape}")
-    ##image_series = load_tiff_series(args.path)
-    ##image_series = load_partial_tiff_series(args.path)
-
     # Apply binary mask to image series
     print("Applying binary mask to image series...")
     #expanded_mask = np.broadcast_to(mask, image_series.shape)
@@ -380,10 +382,29 @@ if __name__ == "__main__":
 
     print(f"Finished saving results as images in output directory {args.output_path}...")
 
-    # If all runs successfully, create a .txt file in the output directory that says "Success!"
+    # If all runs successfully, create a .txt file in the output directory with all parameters
     success_file = os.path.join(args.output_path, "success.txt")
     with open(success_file, "w") as f:
-        f.write("Success!")
+        f.write("Analysis completed successfully!\n\n")
+        f.write("=== PARAMETERS ===\n")
+        f.write(f"Image directory: {args.path}\n")
+        f.write(f"TIFF stack mode: {args.tiff_stack}\n")
+        f.write(f"Frame rate: {args.frame_rate} Hz\n")
+        f.write(f"Signal frequency range: {signal_range[0]} - {signal_range[1]} Hz\n")
+        f.write(f"Binary mask: {'Loaded from file' if args.binary_mask or selected_mask else 'Generated'}\n")
+        if args.binary_mask:
+            f.write(f"Binary mask path: {args.binary_mask}\n")
+        elif selected_mask:
+            f.write(f"Binary mask path: {selected_mask}\n")
+        f.write(f"Output path: {args.output_path}\n")
+        f.write(f"Image series shape: {image_series.shape}\n")
+        if clip_choice == 'y':
+            f.write(f"Time series clipped: Yes (indices {start_idx}:{end_idx})\n")
+        else:
+            f.write(f"Time series clipped: No\n")
+        f.write(f"num_std threshold: {num_std}\n")
+        f.write(f"Number of significant pixels: {np.count_nonzero(~np.isnan(result_array))}\n")
+        f.write(f"Frequency range in results: {np.nanmin(result_array):.2f} - {np.nanmax(result_array):.2f} Hz\n")
 
 # Example usage: python cbf_main.py /Users/josephbeller/Library/CloudStorage/Box-Box/Larina_team_folder/Joesph/Endometriosis_Organoids_data/070825die63p9_LSM02DC_4p4ms_2000x3000_0p5Vx0V_10ms_225khz_a/images
 # Example with tiff stack: python cbf_main.py /path/to/directory/with/single_3d_tiff --tiff_stack
