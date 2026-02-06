@@ -287,10 +287,6 @@ if __name__ == "__main__":
     image_series *= mask
     print("Binary mask applied.")
 
-    # Clip time_series if requested
-    if clip_choice == 'y':
-        image_series = image_series[start_idx:end_idx]
-
     # Run fourier transform on the masked image series
     print("Running Fourier Transform on the masked image series...")
     start_time = time.time()
