@@ -18,7 +18,6 @@ def visualize_binary_mask(image_series, brightness_gradient=False, notebook=Fals
         matplotlib.use('inline')
     
     avg_img = np.mean(image_series, axis=0)
-    avg_img = avg_img.astype(np.uint8)
     if brightness_gradient:
         avg_img = apply_brightness_gradient_correction(avg_img)
     threshold_init = 0
@@ -27,7 +26,7 @@ def visualize_binary_mask(image_series, brightness_gradient=False, notebook=Fals
     fig, ax = plt.subplots()
     plt.subplots_adjust(left=0.25, bottom=0.40)
     mask = (avg_img < threshold_init) if not invert_init else (avg_img > threshold_init)
-    rgb_img = np.stack([avg_img]*3, axis=-1)
+    rgb_img = np.stack([to_display_uint8(avg_img)]*3, axis=-1)
     rgb_img[mask] = [255, 0, 0]
     img_disp = ax.imshow(rgb_img)
     ax.set_title(f"Threshold: {threshold_init} {'(Inverted)' if invert_init else ''}")
@@ -38,7 +37,8 @@ def visualize_binary_mask(image_series, brightness_gradient=False, notebook=Fals
 
     axcolor = 'lightgoldenrodyellow'
     ax_thresh = plt.axes([0.25, 0.25, 0.65, 0.03], facecolor=axcolor)
-    slider = Slider(ax_thresh, 'Threshold', 0, 255, valinit=threshold_init, valstep=1)
+    # slider range adapts to the data instead of assuming uint8
+    slider = Slider(ax_thresh, 'Threshold', 0, np.ceil(avg_img.max()), valinit=threshold_init, valstep=1)
 
     ax_invert = plt.axes([0.25, 0.18, 0.15, 0.04])
     btn_invert = Button(ax_invert, 'Invert')
@@ -53,7 +53,7 @@ def visualize_binary_mask(image_series, brightness_gradient=False, notebook=Fals
         threshold = int(slider.val)
         invert = invert_flag[0]
         mask = (avg_img < threshold) if not invert else (avg_img > threshold)
-        rgb_img = np.stack([avg_img]*3, axis=-1)
+        rgb_img = np.stack([to_display_uint8(avg_img)]*3, axis=-1)
         rgb_img[mask] = [255, 0, 0]
         img_disp.set_data(rgb_img)
         ax.set_title(f"Threshold: {threshold} {'(Inverted)' if invert else ''}")

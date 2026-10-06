@@ -30,6 +30,7 @@ if __name__ == "__main__":
     print(f"Loaded {image_series.shape[0]} frames of size {image_series.shape[1]}x{image_series.shape[2]}.")
     print(f"Loading took {elapsed:.2f} seconds.")
 
+    image_series = np.squeeze(image_series)
     threshold, invert = visualize_binary_mask(image_series, args.brightness_gradient)
     mask = binary_mask(image_series, threshold, invert, args.brightness_gradient)
     invert_str = "_inv" if invert else ""

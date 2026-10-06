@@ -4,6 +4,7 @@ from preprocessing_utils import *
 from visual_utils import *
 import numpy as np
 import time
+from datetime import datetime
 from matplotlib.colors import Normalize
 from matplotlib import cm
 import matplotlib.colors
@@ -18,15 +19,18 @@ def cbf_fft(image_series, frame_rate, signal_range, vis_image=None):
         frame_rate (float): Frame rate of the image series.
         expected_signal (tuple): Expected signal frequency range in Hz.
     Returns:
-        tuple: (result_array, num_std)
-            result_array: (H, W) array with significant pixels != 0. Significant pixels are filled with corresponding freqeuncy values.
-            num_std: The value used for the significance threshold.
+        tuple: (result_array, num_std, amplitude_threshold)
+             result_array: (H, W) array with significant pixels != 0. Significant pixels are filled with corresponding freqeuncy values.
+             num_std: The value used for the significance threshold.
+             amplitude_threshold: noise_mean + num_std * noise_std, in scaled amplitude units.
     """
 
     # Computer Fourier transform and power spectrum density
     fft = np.fft.fft(image_series-np.average(image_series, axis=0), axis=0)
     print(f"Successfully computed fft.")
-    spectra = 2 * np.abs(fft)
+    # the DFT returns amplitudes scaled by the number of frames, so divide it
+    # back out to get physically meaningful amplitude values
+    spectra = 2 * np.abs(fft) / image_series.shape[0]
     freq = np.fft.fftfreq(len(fft), d = 1/frame_rate)
 
     # Using expected signal frequency range, calculate noise_mean and noise_std
@@ -46,59 +50,87 @@ def cbf_fft(image_series, frame_rate, signal_range, vis_image=None):
         # display image: last image of image series
         # num_std, make a button to increase or decrease num_std by 0.25. Min 0 and max 10.
         # For all pixels in image, display pixel as green if the amplitude of the max frequency is > mean(noise_max) + num_std * std(noise_max)
-    num_std = optimize_num_std_widget(image_series, signal_max, noise_mean, noise_std, vis_image=vis_image)
+    num_std, amplitude_threshold = optimize_num_std_widget(image_series, signal_max, noise_mean, noise_std, vis_image=vis_image)
 
-    result_array = np.where(signal_max > noise_mean + num_std * noise_std, signal_max, 0)
+    result_array = np.where(signal_max > amplitude_threshold, signal_max, 0)
     # Apply 4x4 median filter to reduce noise
     result_array = median_filter(result_array, size=(4, 4))
     result_array = np.where(result_array > 0, frequency_max, np.nan)
     
-    return result_array, num_std
+    return result_array, num_std, amplitude_threshold
 
 def optimize_num_std_widget(image_series, signal_max, noise_mean, noise_std, vis_image=None):
     """
-    Interactive widget to optimize num_std for significance thresholding.
+    Interactive widget to optimize the amplitude threshold (from FFT).
+    Essentially, this compares amplitude for periodicities of cilia vs noise.
+    Two linked sliders: num_std (in units of noise std) and the absolute
+    amplitude threshold it corresponds to. Moving either updates the other.
     Shows the last image with green overlay for significant pixels.
-    Returns the chosen num_std value.
+    Returns (num_std, amplitude_threshold).
     """
     if vis_image is None:
         vis_image = image_series[-1]
     num_std_init = 1.0
+    amp_max = int(np.ceil(signal_max.max()))
+    amp_init = noise_mean + num_std_init * noise_std
 
     fig, ax = plt.subplots()
-    plt.subplots_adjust(left=0.25, bottom=0.40)
-    sig_mask = (signal_max > noise_mean + num_std_init * noise_std)
-    rgb_img = np.stack([vis_image]*3, axis=-1)  # Turn display image into RGB
+    plt.subplots_adjust(left=0.25, bottom=0.45)
+    sig_mask = (signal_max > amp_init)
+    rgb_img = np.stack([to_display_uint8(vis_image)]*3, axis=-1)  # Turn display image into RGB
     rgb_img[sig_mask] = [0, 255, 0]  # Highlight significant pixels in green
     img_disp = ax.imshow(rgb_img)
-    ax.set_title(f"num_std: {num_std_init:.2f}")
+    ax.set_title(f"num_std: {num_std_init:.2f} | threshold: {amp_init:.2f}")
     ax.axis('off')
 
     fig.text(0.5, 0.05, f"Note: Pixels shown in green are significant at the selected num_std value.", ha='center', va='center', fontsize=10, color='red')
 
     axcolor = 'lightgoldenrodyellow'
-    ax_slider = plt.axes([0.25, 0.25, 0.65, 0.03], facecolor=axcolor)
-    slider = Slider(ax_slider, 'num_std', 0, 10, valinit=num_std_init, valstep=0.25)
+    ax_slider_std = plt.axes([0.25, 0.30, 0.65, 0.03], facecolor=axcolor)
+    slider_std = Slider(ax_slider_std, 'num_std', 0, 10, valinit=num_std_init, valstep=0.05)
 
-    ax_finalize = plt.axes([0.7, 0.18, 0.2, 0.04])
+    ax_slider_amp = plt.axes([0.25, 0.24, 0.65, 0.03], facecolor=axcolor)
+    slider_amp = Slider(ax_slider_amp, 'Threshold', 0, amp_max, valinit=amp_init, valstep=0.1)
+
+    ax_finalize = plt.axes([0.7, 0.14, 0.2, 0.04])
     btn_finalize = Button(ax_finalize, 'Finalize')
 
     finalized = {'value': None}
+    # guard so the two linked sliders don't trigger each other in a loop
+    updating = [False]
 
-    def update(val):
-        num_std = slider.val
-        sig_mask = (signal_max > noise_mean + num_std * noise_std)
-        rgb_img = np.stack([vis_image]*3, axis=-1)  # Turn display image into RGB
-        rgb_img[sig_mask] = [0, 255, 0]  # Highlight significant pixels in green
+    def refresh():
+        num_std = slider_std.val
+        threshold = slider_amp.val
+        sig_mask = (signal_max > threshold)
+        rgb_img = np.stack([to_display_uint8(vis_image)]*3, axis=-1)
+        rgb_img[sig_mask] = [0, 255, 0]
         img_disp.set_data(rgb_img)
-        ax.set_title(f"num_std: {num_std:.2f}")
+        ax.set_title(f"num_std: {num_std:.2f} | threshold: {threshold:.2f}")
         fig.canvas.draw_idle()
 
+    def update_from_std(val):
+        if updating[0]:
+            return
+        updating[0] = True
+        slider_amp.set_val(noise_mean + slider_std.val * noise_std)
+        updating[0] = False
+        refresh()
+
+    def update_from_amp(val):
+        if updating[0]:
+            return
+        updating[0] = True
+        slider_std.set_val((slider_amp.val - noise_mean) / noise_std)
+        updating[0] = False
+        refresh()
+
     def finalize_clicked(event):
-        finalized['value'] = slider.val
+        finalized['value'] = (slider_std.val, slider_amp.val)
         plt.close(fig)
 
-    slider.on_changed(update)
+    slider_std.on_changed(update_from_std)
+    slider_amp.on_changed(update_from_amp)
     btn_finalize.on_clicked(finalize_clicked)
 
     plt.show()
@@ -134,19 +166,27 @@ if __name__ == "__main__":
     parser.add_argument("--frame_rate", type=float, help="Frame rate for the output movie.")
     parser.add_argument("--binary_mask", type=str, help="Path to the binary mask file. If not provided, will walk user through to obtain a new mask.")
     parser.add_argument( "--output_path", type=str, default=None, help="Path to save the output movie. Defaults to one directory back from 'path' in a new directory called 'cilia_beat_frequency'.")
-    parser.add_argument("--tiff_stack", action='store_true', help="Specify if the input is a single 3D TIFF file instead of a directory of 2D TIFF files. Note: an entire directory must be handed and this should be the only .tiff file in there.")
+    parser.add_argument("--tiff_stack", action='store_true', help="Specify if the input is a single 3D TIFF file instead of a directory of 2D TIFF files.")
 
     args = parser.parse_args()
 
-    # Validate path input
-    if not os.path.isdir(args.path):
-        raise ValueError(f"The specified path {args.path} is not a valid directory.")
+    # --tiff_stack accepts either a single 3D TIFF file or a folder containing one.
+    # if a file is given, switch its parent dir so the rest of the script works as before.
+    tiff_stack_file = None
+    if args.tiff_stack and os.path.isfile(args.path):
+        tiff_stack_file = args.path
+        args.path = os.path.dirname(args.path)
+    elif not os.path.isdir(args.path):
+        raise ValueError(f"The specified path {args.path} is not a valid directory nor TIFF file.")
 
     # Load in tiff image series
     print("Loading TIFF image series...")
     # If args.tiff_stack is True, load a single 3D TIFF file
     if args.tiff_stack:
-        image_series = load_tiff_3d(os.path.join(args.path, [f for f in os.listdir(args.path) if f.endswith('.tiff') or f.endswith('.tif')][0]))
+        if tiff_stack_file is None:
+            tiff_files = [f for f in os.listdir(args.path) if f.endswith('.tiff') or f.endswith('.tif')]
+            tiff_stack_file = os.path.join(args.path, tiff_files[0])
+        image_series = load_tiff_3d(tiff_stack_file)
     # First, see if image_series is already defined (to avoid loading it twice)
     if 'image_series' not in locals():
         # If not defined, load the image series
@@ -154,6 +194,10 @@ if __name__ == "__main__":
         print(f"Loaded image series with shape: {image_series.shape}")
 
     # Handle multi-channel TIFFs (RGB, RGBA, etc.) by converting to grayscale
+    # First, try squeezing before checking if there are 4 dimensions.
+    image_series = np.squeeze(image_series)
+    print(f"Image series shape after squeezing: {image_series.shape}")
+
     # Weighted average for RGB to grayscale is found here: https://stackoverflow.com/questions/687261/converting-rgb-to-grayscale-intensity
     if image_series.ndim == 4:
         num_channels = image_series.shape[-1]
@@ -221,10 +265,12 @@ if __name__ == "__main__":
             # If args.tiff_stack is True, load a single 3D TIFF file
             if args.tiff_stack:
                 if clip_choice == 'y':
-                    image_series = load_tiff_3d(os.path.join(args.path, [f for f in os.listdir(args.path) if f.endswith('.tiff') or f.endswith('.tif')][0]))
+                    image_series = load_tiff_3d(tiff_stack_file)
+                    image_series = np.squeeze(image_series)
                     image_series = image_series[start_idx:end_idx]
                 else:
-                    image_series = load_tiff_3d(os.path.join(args.path, [f for f in os.listdir(args.path) if f.endswith('.tiff') or f.endswith('.tif')][0]))
+                    image_series = load_tiff_3d(tiff_stack_file)
+                    image_series = np.squeeze(image_series)
             else:
                 if clip_choice == 'y':
                     image_series = load_tiff_series(args.path)
@@ -232,6 +278,7 @@ if __name__ == "__main__":
                 else:
                     image_series = load_tiff_series(args.path)
             print(f"Loaded image series with shape: {image_series.shape}")
+            image_series = np.squeeze(image_series)
             threshold, invert = visualize_binary_mask(image_series)
             mask = binary_mask(image_series, threshold, invert)
 
@@ -253,10 +300,13 @@ if __name__ == "__main__":
                     print("Invalid input. Please enter a numeric value for the frame rate.")
 
     # Set default output_path if not provided
+    # for tiff_stack mode, put cilia_beat_frequency in the same dir as the tiff stack
     if args.output_path is None or args.output_path == "":
-        parent_dir = os.path.abspath(os.path.join(args.path, os.pardir))
-        output_dir = os.path.join(parent_dir, "cilia_beat_frequency")
-        args.output_path = output_dir
+        if args.tiff_stack:
+            args.output_path = os.path.join(args.path, "cilia_beat_frequency")
+        else:
+            parent_dir = os.path.abspath(os.path.join(args.path, os.pardir))
+            args.output_path = os.path.join(parent_dir, "cilia_beat_frequency")
 
     # Create the output directory if it does not exist
     if not os.path.exists(args.output_path):
@@ -284,13 +334,14 @@ if __name__ == "__main__":
     print("Applying binary mask to image series...")
     #expanded_mask = np.broadcast_to(mask, image_series.shape)
     #image_series = np.ma.masked_where(expanded_mask == 0, image_series)
-    image_series *= mask
+    # cast to float (to accept both float and int dtypes)
+    image_series = image_series.astype(float) * mask
     print("Binary mask applied.")
 
     # Run fourier transform on the masked image series
     print("Running Fourier Transform on the masked image series...")
     start_time = time.time()
-    result_array, num_std = cbf_fft(image_series, args.frame_rate, signal_range, vis_image=first_img)
+    result_array, num_std, amplitude_threshold = cbf_fft(image_series, args.frame_rate, signal_range, vis_image=first_img)
     elapsed = time.time() - start_time
     print(f"Fourier Transform and num_std optimization completed in {elapsed:.2f} seconds.")
 
@@ -299,9 +350,9 @@ if __name__ == "__main__":
 
     # 1. Save overlay with significant pixels in color [0, 255, 0] as TIFF
     sig_mask = ~np.isnan(result_array)
-    rgb_img = np.stack([first_img]*3, axis=-1).astype(np.uint8)
+    rgb_img = np.stack([to_display_uint8(first_img)]*3, axis=-1)
     rgb_img[sig_mask] = [0, 255, 0]
-    Image.fromarray(rgb_img).save(os.path.join(args.output_path, "significant_pixels_overlay" + str(num_std) + ".tiff"))
+    Image.fromarray(rgb_img).save(os.path.join(args.output_path, f"significant_pixels_overlay{num_std:.2f}.tiff"))
 
     # 2. Save overlay with significant pixels as colormap as TIFF
     masked_freq = np.ma.masked_invalid(result_array)
@@ -311,15 +362,15 @@ if __name__ == "__main__":
     cmap_img = cmap(normed_freq.filled(0))[:, :, :3]  # RGB only
     cmap_img = (cmap_img * 255).astype(np.uint8)
     # Overlay on grayscale first_img
-    gray_img = np.stack([first_img]*3, axis=-1).astype(np.uint8)
+    gray_img = np.stack([to_display_uint8(first_img)]*3, axis=-1)
     overlay_img = gray_img.copy()
     overlay_img[sig_mask] = cmap_img[sig_mask]
-    Image.fromarray(overlay_img).save(os.path.join(args.output_path, "significant_pixel_freqs_overlay_cmap" + str(num_std) + ".tiff"))
+    Image.fromarray(overlay_img).save(os.path.join(args.output_path, f"significant_pixel_freqs_overlay_cmap{num_std:.2f}.tiff"))
 
     # 3. Save image with only significant pixels as colormap (no background) as TIFF
     cmap_only = np.zeros_like(cmap_img)
     cmap_only[sig_mask] = cmap_img[sig_mask]
-    Image.fromarray(cmap_only).save(os.path.join(args.output_path, "significant_pixel_freqs_cmap" + str(num_std) + ".tiff"))
+    Image.fromarray(cmap_only).save(os.path.join(args.output_path, f"significant_pixel_freqs_cmap{num_std:.2f}.tiff"))
 
     # 4. Save the colorscale as a separate image (vertical bar) with numerical ticks
     fig, ax = plt.subplots(figsize=(1, 6))
@@ -350,17 +401,17 @@ if __name__ == "__main__":
     # Make sure the axis is visible for ticks and labels
     ax.set_axis_on()
     ax.get_xaxis().set_visible(True)
-    plt.savefig(os.path.join(args.output_path, "colorscale" + str(num_std) + ".tiff"), bbox_inches='tight', pad_inches=0.3, facecolor=fig.get_facecolor())
+    plt.savefig(os.path.join(args.output_path, f"colorscale{num_std:.2f}.tiff"), bbox_inches='tight', pad_inches=0.3, facecolor=fig.get_facecolor())
     plt.close()
 
     # 5. Save a numpy matrix of the pixel by dominant frequency as well as a corresponding histogram plot
-    np.save(os.path.join(args.output_path, "pixel_dominant_frequency" + str(num_std) + ".npy"), result_array)
+    np.save(os.path.join(args.output_path, f"pixel_dominant_frequency{num_std:.2f}.npy"), result_array)
     plt.figure(figsize=(8, 6))
     plt.hist(result_array[~np.isnan(result_array)].flatten(), bins=50, color='blue', alpha=0.7)
     plt.xlabel('Dominant Frequency (Hz)')
     plt.ylabel('Number of Pixels')
     plt.title('Histogram of Dominant Frequencies')
-    plt.savefig(os.path.join(args.output_path, "dominant_frequency_histogram" + str(num_std) + ".png"))
+    plt.savefig(os.path.join(args.output_path, f"dominant_frequency_histogram{num_std:.2f}.png"))
     plt.close()
     # And save a Gaussian density plot of this histogram
     from scipy.stats import gaussian_kde
@@ -373,13 +424,13 @@ if __name__ == "__main__":
     plt.xlabel('Dominant Frequency (Hz)')
     plt.ylabel('Density')
     plt.title('Gaussian Density Plot of Dominant Frequencies')
-    plt.savefig(os.path.join(args.output_path, "dominant_frequency_density_plot" + str(num_std) + ".png"))
+    plt.savefig(os.path.join(args.output_path, f"dominant_frequency_density_plot{num_std:.2f}.png"))
     plt.close()
 
     print(f"Finished saving results as images in output directory {args.output_path}...")
 
     # If all runs successfully, create a .txt file in the output directory with all parameters
-    success_file = os.path.join(args.output_path, "success.txt")
+    success_file = os.path.join(args.output_path, "success_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".txt")
     with open(success_file, "w") as f:
         f.write("Analysis completed successfully!\n\n")
         f.write("=== PARAMETERS ===\n")
@@ -399,6 +450,8 @@ if __name__ == "__main__":
         else:
             f.write(f"Time series clipped: No\n")
         f.write(f"num_std threshold: {num_std}\n")
+        f.write(f"Amplitude threshold: {amplitude_threshold:.4g}\n")
+        f.write(f"Num frames: {image_series.shape[0]}\n")
         f.write(f"Number of significant pixels: {np.count_nonzero(~np.isnan(result_array))}\n")
         f.write(f"Frequency range in results: {np.nanmin(result_array):.2f} - {np.nanmax(result_array):.2f} Hz\n")
 

@@ -22,6 +22,12 @@ def apply_brightness_gradient_correction(img):
     img = (255 * (img - img.min()) / (img.max() - img.min())).astype(np.uint8)
     return img
 
+def to_display_uint8(img):
+    img = np.asarray(img, dtype=float)
+    if img.max() > 0:
+        img = img / img.max() * 255
+    return img.astype(np.uint8)
+
 def binary_mask(image_series, threshold, invert, brightness_gradient=False):
     """
     Generate a binary mask from the image series based on the specified threshold and invert flag.
