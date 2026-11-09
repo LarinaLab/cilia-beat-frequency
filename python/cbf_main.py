@@ -32,7 +32,7 @@ def cbf_fft(image_series, frame_rate, signal_range, vis_image=None):
     # Using expected signal frequency range, calculate noise_mean and noise_std
     signal_max = spectra[(freq > signal_range[0]) & (freq <= signal_range[1]), :, :].max(axis=0) # Stores the maximum amplitude for expected signal range
     frequency_max_index = spectra[(freq >= signal_range[0]) & (freq <= signal_range[1]), :, :].argmax(axis=0) # Stores the corresponding frequency for the maximum amplitude in the expected signal range
-    frequency_max = freq[frequency_max_index] + signal_range[0]
+    frequency_max = freq[frequency_max_index] + freq[freq > signal_range[0]][0]
     noise_max = spectra[(freq >= signal_range[1]) & (freq <= max(freq)), :, :].max(axis=0) # Stores the maximum amplitude for frequencies above the expected signal range
     noise_max = noise_max[noise_max != 0]  # Filter out all values of 0
     noise_max = noise_max.reshape(-1,1) # Reshape for next calculations
